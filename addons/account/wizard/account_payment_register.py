@@ -115,7 +115,8 @@ class AccountPaymentRegister(models.TransientModel):
         :param batch_result:    A batch returned by '_get_batches'.
         :return:                A string representing a communication to be set on payment.
         '''
-        return ' '.join(label for label in batch_result['lines'].mapped('name') if label)
+        labels = set(line.name or line.move_id.ref or line.move_id.name for line in batch_result['lines'])
+        return ' '.join(sorted(labels))
 
     @api.model
     def _get_line_batch_key(self, line):
@@ -127,7 +128,7 @@ class AccountPaymentRegister(models.TransientModel):
             'partner_id': line.partner_id.id,
             'account_id': line.account_id.id,
             'currency_id': (line.currency_id or line.company_currency_id).id,
-            'partner_bank_id': line.move_id.partner_bank_id.id,
+            'partner_bank_id': (line.move_id.partner_bank_id or line.partner_id.commercial_partner_id.bank_ids[:1]).id,
             'partner_type': 'customer' if line.account_internal_type == 'receivable' else 'supplier',
             'payment_type': 'inbound' if line.balance > 0.0 else 'outbound',
         }
@@ -195,11 +196,12 @@ class AccountPaymentRegister(models.TransientModel):
         ''' Load initial values from the account.moves passed through the context. '''
         for wizard in self:
             batches = wizard._get_batches()
+            batch_result = batches[0]
+            wizard_values_from_batch = wizard._get_wizard_values_from_batch(batch_result)
 
             if len(batches) == 1:
                 # == Single batch to be mounted on the view ==
-                batch_result = batches[0]
-                wizard.update(wizard._get_wizard_values_from_batch(batch_result))
+                wizard.update(wizard_values_from_batch)
 
                 wizard.can_edit_wizard = True
                 wizard.can_group_payments = len(batch_result['lines']) != 1
@@ -209,7 +211,7 @@ class AccountPaymentRegister(models.TransientModel):
                     'company_id': batches[0]['lines'][0].company_id.id,
                     'partner_id': False,
                     'partner_type': False,
-                    'payment_type': False,
+                    'payment_type': wizard_values_from_batch['payment_type'],
                     'source_currency_id': False,
                     'source_amount': False,
                     'source_amount_currency': False,
@@ -261,28 +263,11 @@ class AccountPaymentRegister(models.TransientModel):
     def _compute_partner_bank_id(self):
         ''' The default partner_bank_id will be the first available on the partner. '''
         for wizard in self:
-            available_partner_bank_accounts = wizard.partner_id.bank_ids
+            available_partner_bank_accounts = wizard.partner_id.bank_ids.filtered(lambda x: x.company_id in (False, wizard.company_id))
             if available_partner_bank_accounts:
                 wizard.partner_bank_id = available_partner_bank_accounts[0]._origin
             else:
                 wizard.partner_bank_id = False
-
-    @api.depends('journal_id')
-    def _compute_payment_method_id(self):
-        for wizard in self:
-            batches = wizard._get_batches()
-            payment_type = batches[0]['key_values']['payment_type']
-
-            if payment_type == 'inbound':
-                available_payment_methods = wizard.journal_id.inbound_payment_method_ids
-            else:
-                available_payment_methods = wizard.journal_id.outbound_payment_method_ids
-
-            # Select the first available one by default.
-            if available_payment_methods:
-                wizard.payment_method_id = available_payment_methods[0]._origin
-            else:
-                wizard.payment_method_id = False
 
     @api.depends('payment_type',
                  'journal_id.inbound_payment_method_ids',

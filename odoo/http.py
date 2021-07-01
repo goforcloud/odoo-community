@@ -781,7 +781,7 @@ class HttpRequest(WebRequest):
 
 Odoo URLs are CSRF-protected by default (when accessed with unsafe
 HTTP methods). See
-https://www.odoo.com/documentation/14.0/reference/http.html#csrf for
+https://www.odoo.com/documentation/14.0/developer/reference/http.html#csrf for
 more details.
 
 * if this endpoint is accessed through Odoo via py-QWeb form, embed a CSRF
@@ -1437,7 +1437,10 @@ class Root(object):
                 except werkzeug.exceptions.HTTPException as e:
                     return request._handle_exception(e)
                 request.set_handler(func, arguments, "none")
-                result = request.dispatch()
+                try:
+                    result = request.dispatch()
+                except Exception as e:
+                    return request._handle_exception(e)
                 return result
 
             with request:

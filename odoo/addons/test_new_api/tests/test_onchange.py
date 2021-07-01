@@ -497,13 +497,13 @@ class TestOnChange(SavepointCaseWithUserDemo):
 
         self.env.cache.invalidate()
         Message = self.env['test_new_api.related']
-        result = Message.onchange(value, ['message', 'message_name', 'message_currency'], field_onchange)
+        result = Message.onchange(value, 'message', field_onchange)
 
         self.assertEqual(result['value'], onchange_result)
 
         self.env.cache.invalidate()
         Message = self.env(user=self.user_demo.id)['test_new_api.related']
-        result = Message.onchange(value, ['message', 'message_name', 'message_currency'], field_onchange)
+        result = Message.onchange(value, 'message', field_onchange)
 
         self.assertEqual(result['value'], onchange_result)
 
@@ -742,6 +742,24 @@ class TestComputeOnchange(common.TransactionCase):
         self.assertEqual(form.bar, "foo6r")
         self.assertEqual(form.baz, "baz5")
 
+    def test_onchange_default(self):
+        form = common.Form(self.env['test_new_api.compute.onchange'].with_context(
+            default_active=True, default_foo="foo", default_baz="baz",
+        ))
+        # 'baz' is computed editable, so when given a default value it should
+        # 'not be recomputed, even if a dependency also has a default value
+        self.assertEqual(form.foo, "foo")
+        self.assertEqual(form.bar, "foor")
+        self.assertEqual(form.baz, "baz")
+
+    def test_onchange_once(self):
+        """ Modifies `foo` field which will trigger an onchange method and
+        checks it was triggered only one time. """
+        form = Form(self.env['test_new_api.compute.onchange'].with_context(default_foo="oof"))
+        record = form.save()
+        self.assertEqual(record.foo, "oof")
+        self.assertEqual(record.count, 1, "value onchange must be called only one time")
+
     def test_onchange_one2many(self):
         record = self.env['test_new_api.model_parent_m2o'].create({
             'name': 'Family',
@@ -805,3 +823,47 @@ class TestComputeOnchange(common.TransactionCase):
         ]
         result = record.onchange({'line_ids': line_ids}, 'line_ids', spec)
         self.assertEqual(result, expected)
+
+    def test_computed_editable_one2many_domain(self):
+        """ Test a computed, editable one2many field with a domain. """
+        record = self.env['test_new_api.one2many'].create({'name': 'foo'})
+        self.assertRecordValues(record.line_ids, [
+            {'name': 'foo', 'count': 1},
+        ])
+
+        # trigger recomputation by changing name
+        record.name = 'bar'
+        self.assertRecordValues(record.line_ids, [
+            {'name': 'foo', 'count': 1},
+            {'name': 'bar', 'count': 1},
+        ])
+
+        # manually adding a line should not trigger recomputation
+        record.line_ids.create({'name': 'baz', 'container_id': record.id})
+        self.assertRecordValues(record.line_ids, [
+            {'name': 'foo', 'count': 1},
+            {'name': 'bar', 'count': 1},
+            {'name': 'baz', 'count': 1},
+        ])
+
+        # changing the field in the domain should not trigger recomputation...
+        record.line_ids[-1].count = 2
+        self.assertRecordValues(record.line_ids, [
+            {'name': 'foo', 'count': 1},
+            {'name': 'bar', 'count': 1},
+            {'name': 'baz', 'count': 2},
+        ])
+
+        # ...and may show cache inconsistencies
+        record.line_ids[-1].count = 0
+        self.assertRecordValues(record.line_ids, [
+            {'name': 'foo', 'count': 1},
+            {'name': 'bar', 'count': 1},
+            {'name': 'baz', 'count': 0},
+        ])
+        record.flush()
+        record.invalidate_cache()
+        self.assertRecordValues(record.line_ids, [
+            {'name': 'foo', 'count': 1},
+            {'name': 'bar', 'count': 1},
+        ])
